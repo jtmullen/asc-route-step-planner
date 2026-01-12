@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>ASC Route Step Planner</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/@turf/turf@6/turf.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/togeojson/0.16.0/togeojson.min.js"></script>
+
+    <style>
+        body { margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; overflow: hidden; }
+        #map { position: absolute; top: 0; bottom: 0; width: 100%; z-index: 1; cursor: crosshair; }
+        
+        /* Control Panel */
+        #controls {
+            position: absolute; top: 10px; right: 60px; z-index: 1000;
+            background: white; padding: 0; border-radius: 8px;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.2); width: 300px;
+            display: flex; flex-direction: column; overflow: hidden;
+        }
+
+        .header {
+            background: #2c3e50; color: white; padding: 12px 15px;
+            font-weight: 600; display: flex; justify-content: space-between; align-items: center;
+        }
+        .header h3 { margin: 0; font-size: 1rem; }
+        .reset-btn {
+            background: #e74c3c; border: none; color: white; padding: 4px 8px;
+            border-radius: 4px; font-size: 0.75rem; cursor: pointer;
+        }
+
+        .panel-content { padding: 15px; }
+
+        /* Point A Section */
+        .point-section { margin-bottom: 15px; border-bottom: 1px solid #eee; padding-bottom: 10px; }
+        .label-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px; }
+        .point-label { font-weight: bold; color: #2980b9; font-size: 0.9rem; }
+        .point-b-label { color: #d35400; }
+        
+        .mile-display {
+            font-family: 'Courier New', monospace; font-size: 1.5rem; font-weight: bold;
+            color: #333; margin: 5px 0;
+        }
+        
+        .input-group { display: flex; gap: 5px; margin-top: 5px; }
+        .mile-input {
+            flex: 1; padding: 5px; border: 1px solid #ddd; border-radius: 4px;
+            font-family: monospace;
+        }
+        .jump-btn {
+            background: #eee; border: 1px solid #ddd; border-radius: 4px;
+            cursor: pointer; padding: 0 10px; font-size: 0.8rem;
+        }
+        .jump-btn:hover { background: #e0e0e0; }
+
+        /* Delta Section */
+        .delta-section {
+            background: #f8f9fa; padding: 10px; border-radius: 4px; margin-top: 10px;
+            text-align: center; border: 1px solid #e9ecef; display: none;
+        }
+        .delta-val { font-weight: bold; font-size: 1.1rem; color: #27ae60; }
+
+        /* File Upload */
+        .file-upload {
+            display: block; margin-top: 15px;
+            background: #34495e; color: white; text-align: center;
+            padding: 8px; border-radius: 4px; cursor: pointer; font-size: 0.85rem;
+        }
+        .file-upload:hover { background: #2c3e50; }
+        input[type="file"] { display: none; }
+        
+        .toggle-btn {
+            width: 100%; padding: 8px; background: white; border: 2px dashed #ccc;
+            color: #777; font-weight: bold; cursor: pointer; border-radius: 4px;
+        }
+        .toggle-btn.active {
+            border: 2px solid #d35400; color: #d35400; background: #fff5f0;
+        }
+
+        .drop-zone-active { border: 5px dashed #3498db !important; }
+    </style>
+</head>
+<body>
+
+<div id="controls">
+    <div class="header">
+        <h3>ASC Route Step Planner</h3>
+        <button class="reset-btn" onclick="resetAll()">Reset</button>
+    </div>
+    
+    <div class="panel-content">
+        <div class="point-section">
+            <div class="label-row">
+                <span class="point-label">📍 Point A (Blue)</span>
+            </div>
+            <div id="display-a" class="mile-display">--.-- mi</div>
+            <div class="input-group">
+                <input type="number" id="input-a" class="mile-input" placeholder="Jump to mile..." step="0.1">
+                <button class="jump-btn" onclick="jumpTo('A')">Go</button>
+            </div>
+        </div>
+
+        <button id="btn-toggle-b" class="toggle-btn" onclick="togglePointB()">+ Add Point B</button>
+
+        <div id="section-b" class="point-section" style="display:none; margin-top:15px; border-bottom:none;">
+            <div class="label-row">
+                <span class="point-label point-b-label">🚩 Point B (Orange)</span>
+            </div>
+            <div id="display-b" class="mile-display">--.-- mi</div>
+            <div class="input-group">
+                <input type="number" id="input-b" class="mile-input" placeholder="Jump to mile..." step="0.1">
+                <button class="jump-btn" onclick="jumpTo('B')">Go</button>
+            </div>
+        </div>
+
+        <div id="delta-box" class="delta-section">
+            <div style="font-size:0.8rem; color:#777; margin-bottom:3px;">DISTANCE DELTA</div>
+            <div id="delta-val" class="delta-val">0.00 mi</div>
+        </div>
+
+        <label class="file-upload">
+            Load GPX File
+            <input type="file" id="fileInput" accept=".gpx">
+        </label>
+    </div>
+</div>
+
+<div id="map"></div>
+
+<script>
+    // ==========================================
+    // 1. SETUP MAP & LAYERS
+    // ==========================================
+    var osmLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OSM' });
+    var satLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom: 18, attribution: '© Esri' });
+
+    var map = L.map('map', {
+        center: [39.8283, -98.5795], 
+        zoom: 4,
+        layers: [osmLayer]
+    });
+
+      L.control.layers(
+        { "Street Map": osmLayer, "Satellite": satLayer }, 
+        null, 
+        { position: 'bottomright' }
+    ).addTo(map);
+  
+    // ==========================================
+    // 2. STATE MANAGEMENT
+    // ==========================================
+    var routeLayer = null;
+    var routeGeoJSON = null; // The LineString feature
+    var routeLengthMiles = 0;
+
+    // We track two markers: A and B
+    var markers = {
+        A: { marker: null, mile: 0, active: true, color: '#2980b9' },
+        B: { marker: null, mile: 0, active: false, color: '#d35400' }
+    };
+
+    var activeTarget = 'A'; // Which marker moves when I click the map?
+
+    // ==========================================
+    // 3. CORE LOGIC
+    // ==========================================
+
+    function createMarker(type, latlng, mile) {
+        // Create a draggable marker
+        var m = L.circleMarker(latlng, {
+            radius: 8, 
+            color: markers[type].color, 
+            fillColor: 'white', 
+            fillOpacity: 1, 
+            weight: 3
+        }).addTo(map);
+
+        // Making circleMarker draggable is tricky in Leaflet, so we use a custom interactive handler
+        // But simpler approach: Use a standard Marker with a custom icon for easier dragging logic
+        // Let's swap to a standard marker with a divIcon to make it look like a dot but handle drag events natively
+        map.removeLayer(m);
+
+        var icon = L.divIcon({
+            className: 'custom-dot',
+            html: `<div style="background:${markers[type].color}; width:16px; height:16px; border:2px solid white; border-radius:50%; box-shadow:0 2px 5px rgba(0,0,0,0.3);"></div>`,
+            iconSize: [20, 20],
+            iconAnchor: [10, 10]
+        });
+
+        var realMarker = L.marker(latlng, { icon: icon, draggable: true }).addTo(map);
+
+        // DRAG EVENT: The "Bead on a wire" logic
+        realMarker.on('drag', function(e) {
+            if (!routeGeoJSON) return;
+            
+            // Snap to line
+            var mousePt = turf.point([e.latlng.lng, e.latlng.lat]);
+            var snapped = turf.nearestPointOnLine(routeGeoJSON, mousePt, {units: 'miles'});
+            
+            // Update position visually
+            realMarker.setLatLng([snapped.geometry.coordinates[1], snapped.geometry.coordinates[0]]);
+            
+            // Update Data
+            markers[type].mile = snapped.properties.location;
+            updateUI();
+        });
+
+        return realMarker;
+    }
+
+    function updateMarkerPos(type, mile) {
+        if (!routeGeoJSON) return;
+        
+        // Ensure mile is within bounds
+        if (mile < 0) mile = 0;
+        if (mile > routeLengthMiles) mile = routeLengthMiles;
+
+        // Find coordinate from mile
+        var pt = turf.along(routeGeoJSON, mile, {units: 'miles'});
+        var lat = pt.geometry.coordinates[1];
+        var lng = pt.geometry.coordinates[0];
+
+        if (!markers[type].marker) {
+            markers[type].marker = createMarker(type, [lat, lng], mile);
+        } else {
+            markers[type].marker.setLatLng([lat, lng]);
+        }
+        markers[type].mile = mile;
+        updateUI();
+    }
+
+    // Handle Map Clicks (Place the active marker)
+    map.on('click', function(e) {
+        if (!routeGeoJSON) return;
+        
+        // Find nearest point on line to click
+        var clickPt = turf.point([e.latlng.lng, e.latlng.lat]);
+        var snapped = turf.nearestPointOnLine(routeGeoJSON, clickPt, {units: 'miles'});
+        
+        // If we are somewhat close to the route (within 20 miles to avoid misclicks)
+        if (snapped.properties.dist < 20) {
+            var mile = snapped.properties.location;
+
+            updateMarkerPos(activeTarget, mile);
+        }
+    });
+
+    // ==========================================
+    // 4. UI INTERACTIONS
+    // ==========================================
+
+    function updateUI() {
+        // Update Text Displays
+        document.getElementById('display-a').innerText = markers.A.mile.toFixed(2) + " mi";
+        document.getElementById('input-a').value = markers.A.mile.toFixed(2);
+        
+        if (markers.B.active) {
+            document.getElementById('display-b').innerText = markers.B.mile.toFixed(2) + " mi";
+            document.getElementById('input-b').value = markers.B.mile.toFixed(2);
+            
+            // Calculate Delta
+            var delta = Math.abs(markers.A.mile - markers.B.mile);
+            document.getElementById('delta-val').innerText = delta.toFixed(2) + " mi";
+        }
+    }
+
+    function jumpTo(type) {
+        var val = parseFloat(document.getElementById('input-' + type.toLowerCase()).value);
+        if (!isNaN(val)) {
+            updateMarkerPos(type, val);
+            // Center map on jump
+            if (markers[type].marker) {
+                map.setView(markers[type].marker.getLatLng(), 14);
+            }
+        }
+    }
+    
+    // Allow pressing Enter in inputs
+    document.getElementById('input-a').addEventListener('keypress', function (e) { if (e.key === 'Enter') jumpTo('A'); });
+    document.getElementById('input-b').addEventListener('keypress', function (e) { if (e.key === 'Enter') jumpTo('B'); });
+
+    function togglePointB() {
+        var btn = document.getElementById('btn-toggle-b');
+        var section = document.getElementById('section-b');
+        var deltaBox = document.getElementById('delta-box');
+        
+        if (!markers.B.active) {
+            // ACTIVATE B
+            markers.B.active = true;
+            btn.classList.add('active');
+            btn.innerText = "Targeting: Point B (Click to switch)";
+            section.style.display = 'block';
+            deltaBox.style.display = 'block';
+            
+            // Spawn B at same location as A initially
+            updateMarkerPos('B', markers.A.mile);
+            activeTarget = 'B';
+        } else {
+            // SWITCH FOCUS (If already active, clicking button toggles which point map clicks move)
+            if (activeTarget === 'B') {
+                activeTarget = 'A';
+                btn.innerText = "Targeting: Point A (Click to switch)";
+                btn.style.border = "2px dashed #2980b9";
+                btn.style.color = "#2980b9";
+            } else {
+                activeTarget = 'B';
+                btn.innerText = "Targeting: Point B (Click to switch)";
+                btn.style.border = "2px solid #d35400";
+                btn.style.color = "#d35400";
+            }
+        }
+    }
+
+    function resetAll() {
+        markers.A.mile = 0;
+        markers.B.mile = 0;
+        markers.B.active = false;
+        
+        // Reset UI
+        document.getElementById('section-b').style.display = 'none';
+        document.getElementById('delta-box').style.display = 'none';
+        document.getElementById('btn-toggle-b').classList.remove('active');
+        document.getElementById('btn-toggle-b').innerText = "+ Add Point B";
+        document.getElementById('btn-toggle-b').style.border = "2px dashed #ccc";
+        document.getElementById('btn-toggle-b').style.color = "#777";
+        
+        activeTarget = 'A';
+
+        // Remove markers
+        if (markers.A.marker) map.removeLayer(markers.A.marker);
+        if (markers.B.marker) map.removeLayer(markers.B.marker);
+        markers.A.marker = null;
+        markers.B.marker = null;
+        
+        // Reset A to start
+        if (routeGeoJSON) updateMarkerPos('A', 0);
+        map.fitBounds(routeLayer.getBounds());
+    }
+
+    // ==========================================
+    // 5. FILE HANDLING
+    // ==========================================
+    // (Standard robust drag/drop logic)
+    ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+        document.body.addEventListener(eventName, e => {e.preventDefault(); e.stopPropagation();}, false);
+    });
+    
+    document.body.addEventListener('dragover', () => document.body.classList.add('drop-zone-active'), false);
+    document.body.addEventListener('dragleave', () => document.body.classList.remove('drop-zone-active'), false);
+    document.body.addEventListener('drop', e => {
+        document.body.classList.remove('drop-zone-active');
+        handleFiles(e.dataTransfer.files);
+    }, false);
+
+    document.getElementById('fileInput').addEventListener('change', function() { handleFiles(this.files); });
+
+    function handleFiles(files) {
+        if (!files.length) return;
+        var reader = new FileReader();
+        reader.onload = function(e) {
+            try {
+                var parser = new DOMParser();
+                var gpxDoc = parser.parseFromString(e.target.result, "text/xml");
+                var geojson = toGeoJSON.gpx(gpxDoc);
+                loadRoute(geojson);
+            } catch (err) { alert("Error parsing GPX."); }
+        };
+        reader.readAsText(files[0]);
+    }
+
+    function loadRoute(geojson) {
+        if (routeLayer) map.removeLayer(routeLayer);
+        
+        routeGeoJSON = geojson.features.find(f => f.geometry.type === "LineString");
+        if (!routeGeoJSON) { alert("No route track found."); return; }
+        
+        routeLengthMiles = turf.length(routeGeoJSON, {units: 'miles'});
+
+        routeLayer = L.geoJSON(geojson, {
+            style: { color: '#2c3e50', weight: 5, opacity: 0.6 }
+        }).addTo(map);
+        
+        map.fitBounds(routeLayer.getBounds());
+        
+        // Initialize A at start
+        updateMarkerPos('A', 0);
+    }
+
+</script>
+
+</body>
+</html>
