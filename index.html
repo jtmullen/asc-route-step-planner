@@ -143,7 +143,7 @@
         layers: [osmLayer]
     });
 
-      L.control.layers(
+    L.control.layers(
         { "Street Map": osmLayer, "Satellite": satLayer }, 
         null, 
         { position: 'bottomright' }
@@ -192,18 +192,26 @@
 
         var realMarker = L.marker(latlng, { icon: icon, draggable: true }).addTo(map);
 
-        // DRAG EVENT: The "Bead on a wire" logic
+        // FIX 1: When you grab a marker, make it the Active Target immediately
+        realMarker.on('dragstart', function() {
+            activeTarget = type;
+            updateUI(); // Refresh UI to show which one is active
+        });
+        
+        // FIX 2: Clicking a marker should also select it (without moving it)
+        realMarker.on('click', function(e) {
+            L.DomEvent.stopPropagation(e); // Stop map from receiving the click
+            activeTarget = type;
+            updateUI();
+        });
+
         realMarker.on('drag', function(e) {
             if (!routeGeoJSON) return;
             
-            // Snap to line
             var mousePt = turf.point([e.latlng.lng, e.latlng.lat]);
             var snapped = turf.nearestPointOnLine(routeGeoJSON, mousePt, {units: 'miles'});
             
-            // Update position visually
             realMarker.setLatLng([snapped.geometry.coordinates[1], snapped.geometry.coordinates[0]]);
-            
-            // Update Data
             markers[type].mile = snapped.properties.location;
             updateUI();
         });
@@ -260,10 +268,20 @@
         if (markers.B.active) {
             document.getElementById('display-b').innerText = markers.B.mile.toFixed(2) + " mi";
             document.getElementById('input-b').value = markers.B.mile.toFixed(2);
-            
-            // Calculate Delta
             var delta = Math.abs(markers.A.mile - markers.B.mile);
             document.getElementById('delta-val').innerText = delta.toFixed(2) + " mi";
+
+            // SYNC THE BUTTON STYLE
+            var btn = document.getElementById('btn-toggle-b');
+            if (activeTarget === 'B') {
+                btn.innerText = "Targeting: Point B (Click to switch)";
+                btn.style.border = "2px solid #d35400";
+                btn.style.color = "#d35400";
+            } else {
+                btn.innerText = "Targeting: Point A (Click to switch)";
+                btn.style.border = "2px dashed #2980b9";
+                btn.style.color = "#2980b9";
+            }
         }
     }
 
