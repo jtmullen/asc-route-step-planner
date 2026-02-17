@@ -398,7 +398,7 @@
         routeLengthMiles = turf.length(routeGeoJSON, {units: 'miles'});
 
         routeLayer = L.geoJSON(geojson, {
-            style: { color: '#2c3e50', weight: 5, opacity: 0.6 }
+            style: { color: '#d35400', weight: 5, opacity: 0.8 }
         }).addTo(map);
         
         map.fitBounds(routeLayer.getBounds());
